@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">quiet.chat</title>
+  <desc id="desc">A dark rounded square with a white q and teal accent.</desc>
+  <rect width="64" height="64" rx="18" fill="#101817"/>
+  <path d="M39.5 23.5c-2.2-2.5-5.4-3.8-9.2-3.8-7.3 0-12.7 5.2-12.7 12.2 0 6.8 5.1 11.9 12.2 11.9 2.4 0 4.6-.6 6.5-1.8v7.1h6V31.9c0-3.3-.9-6.1-2.8-8.4Zm-9 14.9c-3.7 0-6.5-2.7-6.5-6.5s2.8-6.5 6.5-6.5c3.8 0 6.5 2.7 6.5 6.5s-2.7 6.5-6.5 6.5Z" fill="#fff"/>
+  <path d="M36.3 37.1h6v7.2h-6z" fill="#61c8b0"/>
+</svg>

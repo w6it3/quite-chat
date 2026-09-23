@@ -1,0 +1,17 @@
+{
+  "name": "quiet.chat",
+  "short_name": "quiet.chat",
+  "description": "Private, temporary chat rooms with no accounts and no history.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7faf7",
+  "theme_color": "#101817",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
