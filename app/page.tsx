@@ -36,8 +36,10 @@ export default function Page() {
   const [members, setMembers] = useState<Array<{ clientId: string; name: string }>>([])
   const [loading, setLoading] = useState(false)
   const [roomName, setRoomName] = useState('Late night thoughts')
+  const [username, setUsername] = useState('')
   const [limit, setLimit] = useState('4')
   const [joinCode, setJoinCode] = useState('')
+  const [joinUsername, setJoinUsername] = useState('')
   const [roomCode, setRoomCode] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
   const [draft, setDraft] = useState('')
@@ -77,8 +79,10 @@ export default function Page() {
   }, [messages.length])
 
   useEffect(() => {
-    const code = new URLSearchParams(window.location.search).get('room')
-    if (code) void enterRoom(code)
+    const code = new URLSearchParams(window.location.search).get('room') || window.sessionStorage.getItem('quiet-chat-room')
+    const savedUsername = window.sessionStorage.getItem('quiet-chat-username') || ''
+    if (code && savedUsername) void enterRoom(code, savedUsername)
+    else if (code) { setJoinCode(code.toUpperCase()); setModal('join') }
   }, [])
 
   useEffect(() => {
@@ -152,19 +156,29 @@ export default function Page() {
 
   const formatMessage = (item: Message): Message => ({ ...item, time: item.time || new Date(item.createdAt || '').toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) })
 
-  const enterRoom = async (code: string) => {
+  const enterRoom = async (code: string, requestedUsername = joinUsername) => {
+    const cleanUsername = requestedUsername.trim().slice(0, 30)
+    if (!cleanUsername) {
+      setJoinCode(code.toUpperCase())
+      setModal('join')
+      return
+    }
     setLoading(true)
     try {
-      const response = await fetch(`/api/rooms?code=${encodeURIComponent(code)}&clientId=${clientId}`, { cache: 'no-store' })
+      const response = await fetch(`/api/rooms?code=${encodeURIComponent(code)}&clientId=${clientId}&username=${encodeURIComponent(cleanUsername)}`, { cache: 'no-store' })
       if (!response.ok) throw new Error('That room does not exist or has expired.')
       const data = await response.json()
       setRoomCode(code.toUpperCase())
       setRoomName(data.room.name)
       setIsCreator(data.room.creatorId === clientId)
       setMemberCount(Number(data.room.members) || 1)
+      setJoinUsername(cleanUsername)
+      setMembers(Array.isArray(data.room.participants) ? data.room.participants : [])
       const initial = data.messages.map(formatMessage)
       setMessages(initial)
       lastCreated.current = Math.max(0, ...initial.map((item: Message) => new Date(item.createdAt || 0).getTime()))
+      window.sessionStorage.setItem('quiet-chat-room', code.toUpperCase())
+      window.sessionStorage.setItem('quiet-chat-username', cleanUsername)
       setScreen('chat')
       setModal(null)
     } catch (error) { window.alert(error instanceof Error ? error.message : 'Unable to join this room.') } finally { setLoading(false) }
@@ -173,13 +187,16 @@ export default function Page() {
   const createRoom = async () => {
     setLoading(true)
   try {
-  const response = await fetch('/api/rooms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: roomName, limit, clientId }) })
+  const response = await fetch('/api/rooms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: roomName, username: username.trim(), limit, clientId }) })
   const data = await response.json().catch(() => ({ error: 'Unable to create room. Please try again.' }))
   if (!response.ok || !data.roomCode) throw new Error(data.error || 'Unable to create room. Please try again.')
   setRoomCode(data.roomCode)
       setIsCreator(true)
       setMemberCount(1)
+      setMembers([{ clientId, name: username.trim().slice(0, 30) }])
       setMessages([])
+      window.sessionStorage.setItem('quiet-chat-room', data.roomCode)
+      window.sessionStorage.setItem('quiet-chat-username', username.trim().slice(0, 30))
       setScreen('chat')
   setModal('share')
   } catch (error) {
@@ -254,7 +271,15 @@ export default function Page() {
       setDeveloperError(error instanceof Error ? error.message : 'Unable to save social links.')
     } finally { setSavingDeveloperInfo(false) }
   }
-  const leave = () => { setScreen('home'); setRoomCode(''); setMessages([]); setModal(null); setPendingMedia(null) }
+  const leave = async () => {
+    const activeRoomCode = roomCode
+    if (activeRoomCode && clientId) {
+      await fetch('/api/rooms', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ roomCode: activeRoomCode, clientId, action: 'leave' }) }).catch(() => {})
+    }
+    window.sessionStorage.removeItem('quiet-chat-room')
+    window.sessionStorage.removeItem('quiet-chat-username')
+    setScreen('home'); setRoomCode(''); setMessages([]); setMembers([]); setMemberCount(1); setModal(null); setPendingMedia(null)
+  }
 
   if (loading) return <main className="app-shell"><Loading label="Opening your quiet room…" /></main>
 
@@ -270,6 +295,6 @@ export default function Page() {
       <div className="composer-wrap"><div className="composer"><input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) void sendMessage() }} placeholder="Write a message…" aria-label="Message" /><input ref={fileRef} className="sr-only" type="file" accept="image/*" onChange={selectFile} /><button className="composer-icon" onClick={() => fileRef.current?.click()} aria-label="Attach image"><Paperclip /></button><button className={`composer-icon ${showEmoji ? 'active' : ''}`} onClick={() => setShowEmoji((value) => !value)} aria-label="Choose emoji"><Smile /></button><button className="send-button" disabled={sending} onClick={() => void sendMessage()} aria-label="Send message"><Send /></button></div>{showEmoji && <div className="emoji-picker" role="listbox">{emojiOptions.map((emoji) => <button key={emoji} onClick={() => setDraft((value) => `${value}${emoji}`)} aria-label={`Add ${emoji}`}>{emoji}</button>)}</div>}<div className="composer-hint"><span><ImageIcon /> Images up to 4 MB</span><span>Enter to send</span></div></div>
     </section>}
     {viewingImage && <div className="image-lightbox" onMouseDown={(event) => { if (event.target === event.currentTarget) setViewingImage(null) }}><button className="image-lightbox-close" onClick={() => setViewingImage(null)} aria-label="Close image"><X /></button><img src={viewingImage} alt="Full-size attachment" /></div>}
-    {modal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setModal(null) }}><div className="modal-card">{modal !== 'leave' && <button className="modal-close" onClick={() => setModal(null)} aria-label="Close"><X /></button>}{modal === 'create' && <><div className="modal-icon"><Plus /></div><div className="modal-heading"><h2>Create a quiet room</h2><p>A private space that disappears when the conversation ends.</p></div><label>Room name<input value={roomName} onChange={(event) => setRoomName(event.target.value)} /></label><label>People allowed<select value={limit} onChange={(event) => setLimit(event.target.value)}><option value="2">2 people</option><option value="4">4 people</option><option value="8">8 people</option></select></label><button className="primary-button" onClick={() => void createRoom()}>Create room <ArrowUpRight /></button></>}{modal === 'join' && <><div className="modal-icon blue-icon"><Link2 /></div><div className="modal-heading"><h2>Join a room</h2><p>Enter the invite code shared with you.</p></div><label>Room code<input value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} placeholder="e.g. OR534O" /></label><button className="primary-button" disabled={joinCode.length < 4} onClick={() => void enterRoom(joinCode)}>Join room <ArrowUpRight /></button><div className="or-divider">or</div><button className="secondary-button" onClick={() => window.alert('QR scanning can be added with camera permissions in the deployed app.') }><QrCode /> Scan invite QR</button></>}{modal === 'close' && <><div className="modal-icon red-icon"><X /></div><div className="modal-heading"><h2>Close this room?</h2><p>Everyone in the chat will be sent back to the home screen immediately.</p></div><div className="leave-actions"><button className="secondary-button" onClick={() => setModal(null)}>Keep room open</button><button className="primary-button danger-button" onClick={() => void closeRoom()}>Close room</button></div></>}{modal === 'share' && <><div className="modal-icon green-icon"><Link2 /></div><div className="modal-heading"><h2>Invite people in</h2><p>Share this room code or scan the QR.</p></div><div className="room-code"><small>ROOM CODE</small><strong>{roomCode}</strong><button onClick={() => void navigator.clipboard?.writeText(roomCode)} aria-label="Copy room code"><Copy /></button></div><button className="share-link" onClick={() => void navigator.clipboard?.writeText(shareLink)} aria-label="Copy invite link"><Link2 /> Copy link</button><button className="secondary-button" onClick={() => void showQr()}><QrCode /> Show invite QR</button><button className="primary-button" onClick={() => setModal(null)}>Done</button></>}{modal === 'qr' && <><div className="modal-icon green-icon"><QrCode /></div><div className="modal-heading"><h2>Scan to join</h2><p>Point your camera at this room invite.</p></div>{qr && <img className="qr-image" src={qr} alt="QR code for this room" />}<button className="primary-button" onClick={() => setModal('share')}>Done</button></>}{modal === 'developer' && <><div className="modal-heading developer-heading"><h2>Developed by <span className="developer-name">White</span></h2><button type="button" className="developer-manage-button" onClick={() => { setDeveloperError(''); setDeveloperPassword(''); setModal('developer-password') }} aria-label="Manage social links"><LockKeyhole /></button></div><div className="developer-socials"><a href={developerInfo.instagram} target="_blank" rel="noopener noreferrer" aria-label="Instagram" className="social-link instagram"><img src="https://cdn.jsdelivr.net/gh/glincker/thesvg@main/public/icons/instagram/default.svg" alt="Instagram" /></a><a href={developerInfo.linkedin} target="_blank" rel="noopener noreferrer" aria-label="LinkedIn" className="social-link linkedin"><img src="https://cdn.jsdelivr.net/gh/glincker/thesvg@main/public/icons/linkedin/default.svg" alt="LinkedIn" /></a><a href={developerInfo.github} target="_blank" rel="noopener noreferrer" aria-label="GitHub" className="social-link github"><img src="https://cdn.jsdelivr.net/gh/glincker/thesvg@main/public/icons/github/default.svg" alt="GitHub" /></a></div></>}{modal === 'developer-password' && <><div className="modal-icon"><LockKeyhole /></div><div className="modal-heading"><h2>Manage social links</h2><p>Enter the developer password to update these links.</p></div><label>Developer password<input type="password" value={developerPassword} onChange={(event) => setDeveloperPassword(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void openDeveloperManager() }} autoFocus /></label>{developerError && <p className="form-error" role="alert">{developerError}</p>}<button className="primary-button" disabled={!developerPassword || savingDeveloperInfo} onClick={() => void openDeveloperManager()}>Continue <ArrowUpRight /></button></>}{modal === 'developer-manage' && <><div className="modal-icon"><LockKeyhole /></div><div className="modal-heading"><h2>Edit social links</h2><p>These URLs are saved securely in MongoDB.</p></div><label>Instagram URL<input type="url" value={developerInfo.instagram} onChange={(event) => setDeveloperInfo((current) => ({ ...current, instagram: event.target.value }))} /></label><label>LinkedIn URL<input type="url" value={developerInfo.linkedin} onChange={(event) => setDeveloperInfo((current) => ({ ...current, linkedin: event.target.value }))} /></label><label>GitHub URL<input type="url" value={developerInfo.github} onChange={(event) => setDeveloperInfo((current) => ({ ...current, github: event.target.value }))} /></label>{developerError && <p className="form-error" role="alert">{developerError}</p>}<button className="primary-button" disabled={savingDeveloperInfo} onClick={() => void saveDeveloperInfo()}><Save /> Save links</button></>}{modal === 'leave' && <><div className="modal-icon"><ArrowLeft /></div><div className="modal-heading"><h2>Leave this room?</h2><p>You will no longer receive new messages from this temporary room.</p></div><div className="leave-actions"><button className="secondary-button" onClick={() => setModal(null)}>Stay</button><button className="primary-button danger-button" onClick={leave}>Leave chat</button></div></>}</div></div>}
+    {modal && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setModal(null) }}><div className="modal-card">{modal !== 'leave' && <button className="modal-close" onClick={() => setModal(null)} aria-label="Close"><X /></button>}{modal === 'create' && <><div className="modal-icon"><Plus /></div><div className="modal-heading"><h2>Create a quiet room</h2><p>A private space that disappears when the conversation ends.</p></div><label>Your username<input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="e.g. Alex" maxLength={30} /></label><label>Room name<input value={roomName} onChange={(event) => setRoomName(event.target.value)} /></label><label>People allowed<select value={limit} onChange={(event) => setLimit(event.target.value)}><option value="2">2 people</option><option value="4">4 people</option><option value="8">8 people</option></select></label><button className="primary-button" disabled={!username.trim()} onClick={() => void createRoom()}>Create room <ArrowUpRight /></button></>}{modal === 'join' && <><div className="modal-icon blue-icon"><Link2 /></div><div className="modal-heading"><h2>Join a room</h2><p>Enter the invite code shared with you.</p></div><label>Your username<input value={joinUsername} onChange={(event) => setJoinUsername(event.target.value)} placeholder="e.g. Alex" maxLength={30} /></label><label>Room code<input value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} placeholder="e.g. OR534O" /></label><button className="primary-button" disabled={joinCode.length < 4 || !joinUsername.trim()} onClick={() => void enterRoom(joinCode, joinUsername)}>Join room <ArrowUpRight /></button><div className="or-divider">or</div><button className="secondary-button" onClick={() => window.alert('QR scanning can be added with camera permissions in the deployed app.') }><QrCode /> Scan invite QR</button></>}{modal === 'close' && <><div className="modal-icon red-icon"><X /></div><div className="modal-heading"><h2>Close this room?</h2><p>Everyone in the chat will be sent back to the home screen immediately.</p></div><div className="leave-actions"><button className="secondary-button" onClick={() => setModal(null)}>Keep room open</button><button className="primary-button danger-button" onClick={() => void closeRoom()}>Close room</button></div></>}{modal === 'share' && <><div className="modal-icon green-icon"><Link2 /></div><div className="modal-heading"><h2>Invite people in</h2><p>Share this room code or scan the QR.</p></div><div className="room-code"><small>ROOM CODE</small><strong>{roomCode}</strong><button onClick={() => void navigator.clipboard?.writeText(roomCode)} aria-label="Copy room code"><Copy /></button></div><button className="share-link" onClick={() => void navigator.clipboard?.writeText(shareLink)} aria-label="Copy invite link"><Link2 /> Copy link</button><button className="secondary-button" onClick={() => void showQr()}><QrCode /> Show invite QR</button><button className="primary-button" onClick={() => setModal(null)}>Done</button></>}{modal === 'qr' && <><div className="modal-icon green-icon"><QrCode /></div><div className="modal-heading"><h2>Scan to join</h2><p>Point your camera at this room invite.</p></div>{qr && <img className="qr-image" src={qr} alt="QR code for this room" />}<button className="primary-button" onClick={() => setModal('share')}>Done</button></>}{modal === 'developer' && <><div className="modal-heading developer-heading"><h2>Developed by <span className="developer-name">White</span></h2><button type="button" className="developer-manage-button" onClick={() => { setDeveloperError(''); setDeveloperPassword(''); setModal('developer-password') }} aria-label="Manage social links"><LockKeyhole /></button></div><div className="developer-socials"><a href={developerInfo.instagram} target="_blank" rel="noopener noreferrer" aria-label="Instagram" className="social-link instagram"><img src="https://cdn.jsdelivr.net/gh/glincker/thesvgmain/public/icons/instagram/default.svg" alt="Instagram" /></a><a href={developerInfo.linkedin} target="_blank" rel="noopener noreferrer" aria-label="LinkedIn" className="social-link linkedin"><img src="https://cdn.jsdelivr.net/gh/glincker/thesvg@main/public/icons/linkedin/default.svg" alt="LinkedIn" /></a><a href={developerInfo.github} target="_blank" rel="noopener noreferrer" aria-label="GitHub" className="social-link github"><img src="https://cdn.jsdelivr.net/gh/glincker/thesvg@main/public/icons/github/default.svg" alt="GitHub" /></a></div></>}{modal === 'developer-password' && <><div className="modal-icon"><LockKeyhole /></div><div className="modal-heading"><h2>Manage social links</h2><p>Enter the developer password to update these links.</p></div><label>Developer password<input type="password" value={developerPassword} onChange={(event) => setDeveloperPassword(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void openDeveloperManager() }} autoFocus /></label>{developerError && <p className="form-error" role="alert">{developerError}</p>}<button className="primary-button" disabled={!developerPassword || savingDeveloperInfo} onClick={() => void openDeveloperManager()}>Continue <ArrowUpRight /></button></>}{modal === 'developer-manage' && <><div className="modal-icon"><LockKeyhole /></div><div className="modal-heading"><h2>Edit social links</h2><p>These URLs are saved securely in MongoDB.</p></div><label>Instagram URL<input type="url" value={developerInfo.instagram} onChange={(event) => setDeveloperInfo((current) => ({ ...current, instagram: event.target.value }))} /></label><label>LinkedIn URL<input type="url" value={developerInfo.linkedin} onChange={(event) => setDeveloperInfo((current) => ({ ...current, linkedin: event.target.value }))} /></label><label>GitHub URL<input type="url" value={developerInfo.github} onChange={(event) => setDeveloperInfo((current) => ({ ...current, github: event.target.value }))} /></label>{developerError && <p className="form-error" role="alert">{developerError}</p>}<button className="primary-button" disabled={savingDeveloperInfo} onClick={() => void saveDeveloperInfo()}><Save /> Save links</button></>}{modal === 'leave' && <><div className="modal-icon"><ArrowLeft /></div><div className="modal-heading"><h2>Leave this room?</h2><p>You will no longer receive new messages from this temporary room.</p></div><div className="leave-actions"><button className="secondary-button" onClick={() => setModal(null)}>Stay</button><button className="primary-button danger-button" onClick={leave}>Leave chat</button></div></>}</div></div>}
   </main>
 }
