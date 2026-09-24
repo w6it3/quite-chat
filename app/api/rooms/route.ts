@@ -24,7 +24,9 @@ export async function POST(request: Request) {
     await database.collection(messages).createIndex({ roomCode: 1, createdAt: 1 })
     const limit = Math.min(6, Math.max(2, Number(body.limit) || 4))
     const clientId = String(body.clientId || '').slice(0, 100)
-    await database.collection(rooms).insertOne({ roomCode, name: String(body.name || 'Quiet room').slice(0, 40), limit, members: 1, participants: clientId ? [{ clientId, name: 'You' }] : [], creatorId: clientId, lastActivityAt: now, expiresAt: new Date(now.getTime() + expiryMs), createdAt: now })
+    const participantName = String(body.username || '').trim().slice(0, 30)
+    if (!participantName) return NextResponse.json({ error: 'Username is required' }, { status: 400 })
+    await database.collection(rooms).insertOne({ roomCode, name: String(body.name || 'Quiet room').slice(0, 40), limit, members: 1, participants: clientId ? [{ clientId, name: participantName }] : [], creatorId: clientId, lastActivityAt: now, expiresAt: new Date(now.getTime() + expiryMs), createdAt: now })
     return NextResponse.json({ roomCode })
   } catch (error) {
     console.error('[v0] Failed to create room:', error)
@@ -36,9 +38,13 @@ export async function DELETE(request: Request) {
   const body = await request.json().catch(() => ({}))
   const roomCode = String(body.roomCode || '').toUpperCase()
   const clientId = String(body.clientId || '')
-  if (!roomCode || !clientId) return NextResponse.json({ error: 'Room and creator are required' }, { status: 400 })
+  if (!roomCode || !clientId) return NextResponse.json({ error: 'Room and client are required' }, { status: 400 })
   const client = await getMongoClient()
   const database = client.db(dbName)
+  if (body.action === 'leave') {
+    const result = await database.collection(rooms).updateOne({ roomCode, 'participants.clientId': clientId }, { $pull: { participants: { clientId } }, $inc: { members: -1 } })
+    return NextResponse.json({ left: result.modifiedCount > 0 })
+  }
   const result = await database.collection(rooms).deleteOne({ roomCode, creatorId: clientId })
   if (!result.deletedCount) return NextResponse.json({ error: 'Only the room creator can close this room' }, { status: 403 })
   await database.collection(messages).deleteMany({ roomCode })
@@ -54,14 +60,15 @@ export async function GET(request: Request) {
   const room = await database.collection(rooms).findOne({ roomCode })
   if (!room || room.expiresAt < new Date()) return NextResponse.json({ error: 'Room not found or expired' }, { status: 404 })
   const clientId = url.searchParams.get('clientId') || ''
+  const requestedName = (url.searchParams.get('username') || '').trim().slice(0, 30)
   const participants = Array.isArray(room.participants) ? room.participants : []
+  if (clientId && !requestedName) return NextResponse.json({ error: 'Username is required' }, { status: 400 })
   let participant = participants.find((item: { clientId: string }) => item.clientId === clientId)
   if (clientId && !participant) {
-    const guestCount = participants.filter((item: { name: string }) => item.name.startsWith('Guest')).length
-    const name = room.limit <= 2 && participants.length === 1 ? 'Someone' : `Guest ${guestCount + 1}`
+    const name = requestedName
     participant = { clientId, name }
     await database.collection(rooms).updateOne({ roomCode }, { $push: { participants: participant }, $inc: { members: 1 } })
   }
   const roomMessages = await database.collection(messages).find({ roomCode }).sort({ createdAt: 1 }).limit(200).toArray()
-  return NextResponse.json({ room: { ...room, _id: undefined }, messages: roomMessages.map(({ _id, senderId, ...message }) => ({ ...message, senderId, mine: senderId === clientId, time: new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) })) })
+  return NextResponse.json({ room: { ...room, _id: undefined, participants, members: participants.length }, messages: roomMessages.map(({ _id, senderId, ...message }) => ({ ...message, senderId, mine: senderId === clientId, time: new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) })) })
 }
